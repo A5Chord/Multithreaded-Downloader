@@ -5,6 +5,8 @@
 #include <cstring>
 #include <process.h>
 #include <mutex>
+#include <signal.h>
+#include <fstream>
 
 #define THREAD_NUM 10
 
@@ -17,6 +19,7 @@ struct fileInfo {
 	int end;
 	DWORD threadId;
 	double download;
+	ifstream* recordFile;
 };
 
 struct fileInfo** pInfoTable;
@@ -54,7 +57,7 @@ int progressFunc(void* userdata, double totalDownload, double nowDownload, doubl
 	lock_guard<mutex> lock(printMutex);
 	if (percent == print)
 	{
-		printf("percent: %d%%\n", percent);
+		printf("threadId: %d, percent: %d%%\n", info->threadId, percent);
 		print++;
 	}
 
@@ -86,6 +89,21 @@ unsigned int __stdcall worker(void* arg) {
 	struct fileInfo* info = (struct fileInfo*)arg;
 
 	char range[64] = { 0 };
+
+	if (info->recordFile && *info->recordFile) {
+		string line;
+		if (getline(*info->recordFile, line)) { // 读取一行
+			istringstream iss(line);           // 将行内容转换为字符串流
+			char dash;
+			if (!(iss >> info->offset >> dash >> info->end)) {
+				cerr << "Failed to parse line: " << line << endl;
+				info->offset = 0;
+				info->end = 0;
+			}
+		}
+	}
+	if (info->offset > info->end) return 0;
+
 	ostringstream oss;
 	oss << info->offset << "-" << info->end;
 	strcpy_s(range, oss.str().c_str());
@@ -167,12 +185,15 @@ int download(const char* url, const char* filename) {
 		return -1;
 	}
 
+	std::ifstream inFile("record.txt", std::ios::in);
+
 	int i = 0;
 	long partSize = fileLength / THREAD_NUM;
 	struct fileInfo* info[THREAD_NUM + 1] = { NULL };
 	for (i = 0; i <= THREAD_NUM; i++)
 	{
 		info[i] = (struct fileInfo*)malloc(sizeof(struct fileInfo));
+		memset(info[i], 0, sizeof(struct fileInfo));
 
 		info[i]->offset = i * partSize;
 		if (i < THREAD_NUM)
@@ -186,6 +207,7 @@ int download(const char* url, const char* filename) {
 		info[i]->fileptr = fileptr;
 		info[i]->url = url;
 		info[i]->download = 0;
+		info[i]->recordFile = &inFile;
 	}
 	pInfoTable = info;
 
@@ -196,6 +218,7 @@ int download(const char* url, const char* filename) {
 			cerr << "Failed to create thread." << endl;
 			return -1;
 		}
+		Sleep(0); //休眠使线程id有序打印
 	}
 
 	for (i = 0; i <= THREAD_NUM; i++) {
@@ -214,10 +237,39 @@ int download(const char* url, const char* filename) {
 	return 0;
 }
 
+void signal_handler(int signum) {
+	//cout << "signum: " << signum << endl;
+	if (signum == 2)
+	{
+		cout << "Download stopped." << endl;
+	}
+
+	// 使用 C++ 标准库的文件操作
+	ofstream outFile("record.txt", ios::out | ios::trunc);
+	if (!outFile) {
+		cerr << "Failed to open file record.txt" << endl;
+		exit(1);
+	}
+
+	// 写入断点信息
+	for (int i = 0; i <= THREAD_NUM; i++) {
+		if (pInfoTable[i]) {
+			outFile << pInfoTable[i]->offset << "-" << pInfoTable[i]->end << "\r\n";
+		}
+	}
+
+	outFile.close();
+	exit(1);
+}
+
 int main(int argc, char* argv[]) {
 	if (argc != 3) {
 		cerr << "arg error! " << endl;
 		return -1;
+	}
+	if (signal(SIGINT, signal_handler) == SIG_ERR)
+	{
+		cerr << "signal error! " << endl;
 	}
 
 	return download(argv[1], argv[2]);
