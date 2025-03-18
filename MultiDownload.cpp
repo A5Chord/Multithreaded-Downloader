@@ -1,26 +1,6 @@
-#include <iostream>
-#include <mutex>
-#include <fstream>
-#include <sstream>
-#include <curl/curl.h>
-#include <csignal>
+#include "download.h"
 
-#define THREAD_NUM 10
-
-using namespace std;
-
-// 文件下载信息结构体
-struct FileInfo {
-    const char* url;          // 下载URL
-    char* fileptr;            // 文件内存映射指针
-    int offset;               // 当前下载偏移量
-    int end;                  // 下载结束位置
-    atomic<double> download;  // 当前下载量
-    double totalDownload;     // 总下载量
-    ifstream* recordFile;     // 记录文件流
-};
-
-struct FileInfo** pInfoTable; // 全局文件信息表
+struct FileInfo** pInfoTable = nullptr; // 全局文件信息表
 atomic<long> downloadFileLength(0);     // 文件总长度
 mutex printMutex;                       // 打印互斥锁
 
@@ -92,7 +72,7 @@ long getDownloadFileLength(const char* url) {
 unsigned int __stdcall worker(void* arg) {
     struct FileInfo* info = (struct FileInfo*)arg;
     char range[64] = { 0 };
-    
+
     // 从存档中读取待下载的范围
     if (info->recordFile && *info->recordFile) {
         string line;
@@ -113,7 +93,6 @@ unsigned int __stdcall worker(void* arg) {
     ostringstream oss;
     oss << info->offset << "-" << info->end;
     strcpy_s(range, oss.str().c_str());
-    //snprintf(range, sizeof(range), "%d-%d", info->offset, info->end);
 
     {
         // 加锁确保打印格式正确
@@ -271,15 +250,4 @@ void signalHandler(int signum) {
 
     outFile.close();
     exit(signum);
-}
-
-int main(int argc, char* argv[]) {
-    if (argc != 3) {
-        cerr << "Usage: " << argv[0] << " <URL> <output file>" << endl;
-        return -1;
-    }
-
-    signal(SIGINT, signalHandler);
-
-    return download(argv[1], argv[2]);
 }
